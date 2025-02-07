@@ -5,7 +5,6 @@ import os
 import pathlib
 import shutil
 import sys
-import time
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -28,7 +27,6 @@ from .constants import (
     APL_FILE_HISTORY,
     DATA_FILE_COOKIES,
     DATA_FILE_SERVERS,
-    DATA_FILE_YTDLP_OAUTH2,
     DEFAULT_AUDIO_CACHE_DIR,
     DEFAULT_COMMAND_ALIAS_FILE,
     DEFAULT_DATA_DIR,
@@ -44,6 +42,7 @@ from .constants import (
     DEPRECATED_USER_BLACKLIST,
     EXAMPLE_OPTIONS_FILE,
     MAXIMUM_LOGS_LIMIT,
+    MUSICBOT_CONFIG_SECTIONS_ORDERED,
     MUSICBOT_TOKEN_ENV_VAR,
 )
 from .exceptions import HelpfulError, RetryConfigException
@@ -109,9 +108,8 @@ class Config:
         self.config_file = config_file
         self.find_config()  # this makes sure the config exists.
 
-        # TODO:  decide on this lil feature.
         # Make updates to config file before loading it in.
-        # ConfigRenameManager(self.config_file)
+        ConfigRenameManager(self.config_file)
 
         config = ExtendedConfigParser()
         if self.config_file.is_file():
@@ -141,7 +139,9 @@ class Config:
         # This gets filled in later while checking for token in the environment vars.
         self.auth: Tuple[str] = ("",)
 
+        ########################################################################
         # Credentials
+        ########################################################################
         self._login_token: str = self.register.init_option(
             section="Credentials",
             option="Token",
@@ -180,7 +180,9 @@ class Config:
             editable=False,
         )
 
+        ########################################################################
         # Permissions
+        ########################################################################
         self.owner_id: int = self.register.init_option(
             section="Permissions",
             option="OwnerID",
@@ -223,9 +225,11 @@ class Config:
             ),
         )
 
-        # Chat
+        ########################################################################
+        # Chat Commands
+        ########################################################################
         self.command_prefix: str = self.register.init_option(
-            section="Chat",
+            section="ChatCommands",
             option="CommandPrefix",
             dest="command_prefix",
             default=ConfigDefaults.command_prefix,
@@ -235,7 +239,7 @@ class Config:
             ),
         )
         self.commands_via_mention: bool = self.register.init_option(
-            section="Chat",
+            section="ChatCommands",
             option="CommandsByMention",
             dest="commands_via_mention",
             default=ConfigDefaults.commands_via_mention,
@@ -247,7 +251,7 @@ class Config:
             ),
         )
         self.bound_channels: Set[int] = self.register.init_option(
-            section="Chat",
+            section="ChatCommands",
             option="BindToChannels",
             dest="bound_channels",
             default=ConfigDefaults.bound_channels,
@@ -260,7 +264,7 @@ class Config:
             ),
         )
         self.unbound_servers: bool = self.register.init_option(
-            section="Chat",
+            section="ChatCommands",
             option="AllowUnboundServers",
             dest="unbound_servers",
             default=ConfigDefaults.unbound_servers,
@@ -271,19 +275,34 @@ class Config:
                 "Only used when BindToChannels is missing an ID for a server."
             ),
         )
-        self.autojoin_channels: Set[int] = self.register.init_option(
-            section="Chat",
-            option="AutojoinChannels",
-            dest="autojoin_channels",
-            default=ConfigDefaults.autojoin_channels,
-            getter="getidset",
+        self.usealias: bool = self.register.init_option(
+            section="ChatCommands",
+            option="UseAlias",
+            dest="usealias",
+            default=ConfigDefaults.usealias,
+            getter="getboolean",
             comment=_Dd(
-                "A list of Voice Channel IDs that MusicBot should automatically join on start up.\n"
-                "Use spaces to separate multiple IDs."
+                "If enabled, MusicBot will allow commands to have multiple names using data in:  config/aliases.json"
+            ),
+            comment_args={"filepath": DEFAULT_COMMAND_ALIAS_FILE},
+        )
+        self.enable_options_per_guild: bool = self.register.init_option(
+            section="ChatCommands",
+            option="EnablePrefixPerGuild",
+            dest="enable_options_per_guild",
+            default=ConfigDefaults.enable_options_per_guild,
+            getter="getboolean",
+            comment=_Dd(
+                # TRANSLATORS: setprefix should not be translated.
+                "Allow MusicBot to save a per-server command prefix, and enables the setprefix command."
             ),
         )
+
+        ########################################################################
+        # Chat Responses
+        ########################################################################
         self.dm_nowplaying: bool = self.register.init_option(
-            section="Chat",
+            section="ChatResponses",
             option="DMNowPlaying",
             dest="dm_nowplaying",
             default=ConfigDefaults.dm_nowplaying,
@@ -293,7 +312,7 @@ class Config:
             ),
         )
         self.no_nowplaying_auto: bool = self.register.init_option(
-            section="Chat",
+            section="ChatResponses",
             option="DisableNowPlayingAutomatic",
             dest="no_nowplaying_auto",
             default=ConfigDefaults.no_nowplaying_auto,
@@ -303,7 +322,7 @@ class Config:
             ),
         )
         self.nowplaying_channels: Set[int] = self.register.init_option(
-            section="Chat",
+            section="ChatResponses",
             option="NowPlayingChannels",
             dest="nowplaying_channels",
             default=ConfigDefaults.nowplaying_channels,
@@ -314,7 +333,7 @@ class Config:
             ),
         )
         self.delete_nowplaying: bool = self.register.init_option(
-            section="Chat",
+            section="ChatResponses",
             option="DeleteNowPlaying",
             dest="delete_nowplaying",
             default=ConfigDefaults.delete_nowplaying,
@@ -322,8 +341,129 @@ class Config:
             comment=_Dd("MusicBot will automatically delete Now Playing messages."),
         )
 
+        self.now_playing_mentions: bool = self.register.init_option(
+            section="ChatResponses",
+            option="NowPlayingMentions",
+            dest="now_playing_mentions",
+            default=ConfigDefaults.now_playing_mentions,
+            getter="getboolean",
+            comment=_Dd("Mention the user who added the song when it is played."),
+        )
+
+        self.delete_messages: bool = self.register.init_option(
+            section="ChatResponses",
+            option="DeleteMessages",
+            dest="delete_messages",
+            default=ConfigDefaults.delete_messages,
+            getter="getboolean",
+            comment=_Dd(
+                # TRANSLATORS: DeleteDelayShort and DeleteDelayLong should not be translated.
+                "Allow MusicBot to automatically delete messages it sends, after a delay.\n"
+                "Delay period is controlled by DeleteDelayShort and DeleteDelayLong."
+            ),
+        )
+        self.delete_invoking: bool = self.register.init_option(
+            section="ChatResponses",
+            option="DeleteInvoking",
+            dest="delete_invoking",
+            default=ConfigDefaults.delete_invoking,
+            getter="getboolean",
+            comment=_Dd("Auto delete valid commands after a delay."),
+        )
+        self.delete_delay_short: float = self.register.init_option(
+            section="ChatResponses",
+            option="DeleteDelayShort",
+            dest="delete_delay_short",
+            default=ConfigDefaults.delete_delay_short,
+            getter="getduration",
+            comment=_Dd(
+                "Sets the short period of seconds before deleting messages.\n"
+                "This period is used by messages that require no further interaction."
+            ),
+        )
+        self.delete_delay_long: float = self.register.init_option(
+            section="ChatResponses",
+            option="DeleteDelayLong",
+            dest="delete_delay_long",
+            default=ConfigDefaults.delete_delay_long,
+            getter="getduration",
+            comment=_Dd(
+                "Sets the long delay period before deleting messages.\n"
+                "This period is used by interactive or long-winded messages, like search and help."
+            ),
+        )
+        self.embeds: bool = self.register.init_option(
+            section="ChatResponses",
+            option="UseEmbeds",
+            dest="embeds",
+            default=ConfigDefaults.embeds,
+            getter="getboolean",
+            comment=_Dd("Allow MusicBot to format its messages as embeds."),
+        )
+        self.footer_text: str = self.register.init_option(
+            section="ChatResponses",
+            option="CustomEmbedFooter",
+            dest="footer_text",
+            default=ConfigDefaults.footer_text,
+            comment=_Dd(
+                # TRANSLATORS: UseEmbeds should not be translated.
+                "Replace MusicBot name/version in embed footer with custom text.\n"
+                "Only applied when UseEmbeds is enabled and it is not blank."
+            ),
+            default_is_empty=True,
+        )
+        self.remove_embed_footer: bool = self.register.init_option(
+            section="ChatResponses",
+            option="RemoveEmbedFooter",
+            dest="remove_embed_footer",
+            default=ConfigDefaults.remove_embed_footer,
+            getter="getboolean",
+            comment=_Dd("Completely remove the footer from embeds."),
+        )
+        self.searchlist: bool = self.register.init_option(
+            section="ChatResponses",
+            option="SearchList",
+            dest="searchlist",
+            default=ConfigDefaults.searchlist,
+            getter="getboolean",
+            comment=_Dd(
+                "If enabled, users must indicate search result choices by sending a message instead of using reactions."
+            ),
+        )
+        self.defaultsearchresults: int = self.register.init_option(
+            section="ChatResponses",
+            option="DefaultSearchResults",
+            dest="defaultsearchresults",
+            default=ConfigDefaults.defaultsearchresults,
+            getter="getint",
+            comment=_Dd(
+                "Sets the default number of search results to fetch when using the search command without a specific number."
+            ),
+        )
+        self.queue_length: int = self.register.init_option(
+            section="ChatResponses",
+            option="QueueLength",
+            dest="queue_length",
+            default=ConfigDefaults.queue_length,
+            getter="getint",
+            comment=_Dd(
+                "The number of entries to show per-page when using q command to list the queue."
+            ),
+        )
+        self.reply_and_mention: bool = self.register.init_option(
+            section="ChatResponses",
+            option="ReplyAndMention",
+            dest="reply_and_mention",
+            default=ConfigDefaults.reply_and_mention,
+            getter="getboolean",
+            comment=_Dd("Command responses will also mention or notify the user."),
+        )
+
+        ########################################################################
+        # Playback
+        ########################################################################
         self.default_volume: float = self.register.init_option(
-            section="MusicBot",
+            section="Playback",
             option="DefaultVolume",
             dest="default_volume",
             default=ConfigDefaults.default_volume,
@@ -334,7 +474,7 @@ class Config:
             ),
         )
         self.default_speed: float = self.register.init_option(
-            section="MusicBot",
+            section="Playback",
             option="DefaultSpeed",
             dest="default_speed",
             default=ConfigDefaults.default_speed,
@@ -347,7 +487,7 @@ class Config:
             ),
         )
         self.skips_required: int = self.register.init_option(
-            section="MusicBot",
+            section="Playback",
             option="SkipsRequired",
             dest="skips_required",
             default=ConfigDefaults.skips_required,
@@ -359,7 +499,7 @@ class Config:
             ),
         )
         self.skip_ratio_required: float = self.register.init_option(
-            section="MusicBot",
+            section="Playback",
             option="SkipRatio",
             dest="skip_ratio_required",
             default=ConfigDefaults.skip_ratio_required,
@@ -369,6 +509,234 @@ class Config:
                 "This percent of listeners in voice must vote for skip.\n"
                 "If SkipsRequired is lower than the computed value, it will be used instead.\n"
                 "You can set this from 0 to 1, or 0% to 100%."
+            ),
+        )
+        self.allow_author_skip: bool = self.register.init_option(
+            section="Playback",
+            option="AllowAuthorSkip",
+            dest="allow_author_skip",
+            default=ConfigDefaults.allow_author_skip,
+            getter="getboolean",
+            comment=_Dd(
+                "Allow the member who requested the song to skip it, bypassing votes."
+            ),
+        )
+        self.legacy_skip: bool = self.register.init_option(
+            section="Playback",
+            option="LegacySkip",
+            dest="legacy_skip",
+            default=ConfigDefaults.legacy_skip,
+            getter="getboolean",
+            comment=_Dd(
+                # TRANSLATORS: InstaSkip should not be translated.
+                "Enable users with the InstaSkip permission to bypass skip voting and force skips."
+            ),
+        )
+        self.auto_pause: bool = self.register.init_option(
+            section="Playback",
+            option="AutoPause",
+            dest="auto_pause",
+            default=ConfigDefaults.auto_pause,
+            getter="getboolean",
+            comment="MusicBot will automatically pause playback when no users are listening.",
+        )
+
+        self.persistent_queue: bool = self.register.init_option(
+            section="Playback",
+            option="PersistentQueue",
+            dest="persistent_queue",
+            default=ConfigDefaults.persistent_queue,
+            getter="getboolean",
+            comment=_Dd(
+                "Allow MusicBot to save the song queue, so queued songs will survive restarts."
+            ),
+        )
+        self.pre_download_next_song: bool = self.register.init_option(
+            section="Playback",
+            option="PreDownloadNextSong",
+            dest="pre_download_next_song",
+            default=ConfigDefaults.pre_download_next_song,
+            getter="getboolean",
+            comment=_Dd(
+                "Enable MusicBot to download the next song in the queue while a song is playing.\n"
+                "Currently this option does not apply to auto playlist or songs added to an empty queue."
+            ),
+        )
+        self.use_experimental_equalization: bool = self.register.init_option(
+            section="Playback",
+            option="UseExperimentalEqualization",
+            dest="use_experimental_equalization",
+            default=ConfigDefaults.use_experimental_equalization,
+            getter="getboolean",
+            comment=_Dd(
+                "Tries to use ffmpeg to get volume normalizing options for use in playback.\n"
+                "This option can cause delay between playing songs, as the whole track must be processed."
+            ),
+        )
+        self.round_robin_queue: bool = self.register.init_option(
+            section="Playback",
+            option="RoundRobinQueue",
+            dest="round_robin_queue",
+            default=ConfigDefaults.defaultround_robin_queue,
+            getter="getboolean",
+            comment=_Dd(
+                "If enabled and multiple members are adding songs, MusicBot will organize playback for one song per member."
+            ),
+        )
+        self.enable_local_media: bool = self.register.init_option(
+            section="Playback",
+            option="EnableLocalMedia",
+            dest="enable_local_media",
+            default=ConfigDefaults.enable_local_media,
+            getter="getboolean",
+            comment=_Dd(
+                # TRANSLATORS: MediaFileDirectory should not be translated.
+                "Enable playback of local media files using the play command.\n"
+                "When enabled, users can use:  `play file://path/to/file.ext`\n"
+                "to play files from the local MediaFileDirectory path."
+            ),
+        )
+
+        self.auto_unpause_on_play: bool = self.register.init_option(
+            section="Playback",
+            option="UnpausePlayerOnPlay",
+            dest="auto_unpause_on_play",
+            default=ConfigDefaults.auto_unpause_on_play,
+            getter="getboolean",
+            comment=_Dd(
+                "Allow MusicBot to automatically unpause when play commands are used."
+            ),
+        )
+        self.use_opus_audio: bool = self.register.init_option(
+            section="Playback",
+            option="UseOpusAudio",
+            dest="use_opus_audio",
+            default=ConfigDefaults.use_opus_audio,
+            getter="getboolean",
+            comment=_Dd(
+                "May reduce CPU usage by avoiding PCM-to-Opus encoding in python.\n"
+                "When enabled, volume is controlled via FFmpeg filter instead of python.\n"
+                "May cause a short delay when tracks first start for bitrate discovery."
+            ),
+        )
+        self.use_opus_probe: bool = self.register.init_option(
+            section="Playback",
+            option="UseOpusProbe",
+            dest="use_opus_probe",
+            default=ConfigDefaults.use_opus_probe,
+            getter="getboolean",
+            comment=_Dd(
+                "Similar to UseOpusAudio, but reduces CPU usage even more where possible.\n"
+                "If the media is already Opus encoded (like YouTube) no re-encoding is done.\n"
+                "This option will disable speed, volume, and UseExperimentalEqualization options."
+            ),
+        )
+        self.default_search_service: str = self.register.init_option(
+            section="Playback",
+            option="DefaultSearchService",
+            dest="default_search_service",
+            default=ConfigDefaults.default_search_service,
+            comment=_Dd(
+                "This option sets the default search service used by MusicBot through ytdlp.\n"
+                "Read ytdlp's list of supported sites to find supported prefixes you can use here.\n"
+                "Some prefix examples:   ytsearch, scsearch, gvsearch, yvsearch, bilisearch, nicosearch"
+            ),
+        )
+
+        ########################################################################
+        # Auto Playlist
+        ########################################################################
+        self.auto_playlist: bool = self.register.init_option(
+            section="AutoPlaylist",
+            option="UseAutoPlaylist",
+            dest="auto_playlist",
+            default=ConfigDefaults.auto_playlist,
+            getter="getboolean",
+            comment=_Dd(
+                "Enable MusicBot to automatically play music from the auto playlist when the queue is empty."
+            ),
+        )
+        self.auto_playlist_random: bool = self.register.init_option(
+            section="AutoPlaylist",
+            option="AutoPlaylistRandom",
+            dest="auto_playlist_random",
+            default=ConfigDefaults.auto_playlist_random,
+            getter="getboolean",
+            comment=_Dd("Shuffles the auto playlist tracks before playing them."),
+        )
+        self.auto_playlist_autoskip: bool = self.register.init_option(
+            section="AutoPlaylist",
+            option="AutoPlaylistAutoSkip",
+            dest="auto_playlist_autoskip",
+            default=ConfigDefaults.auto_playlist_autoskip,
+            getter="getboolean",
+            comment=_Dd(
+                "Enable automatic skip of auto playlist songs when a user plays a new song.\n"
+                "This only applies to the current playing song if it was added by the auto playlist."
+            ),
+        )
+        self.auto_playlist_remove_on_block: bool = self.register.init_option(
+            section="AutoPlaylist",
+            option="AutoPlaylistRemoveBlocked",
+            dest="auto_playlist_remove_on_block",
+            default=ConfigDefaults.auto_playlist_remove_on_block,
+            getter="getboolean",
+            comment=_Dd(
+                "Remove songs from the auto playlist if they are found in the song block list."
+            ),
+        )
+        # write_path not needed, used for display only.
+        hist_file = pathlib.Path(DEFAULT_PLAYLIST_DIR).joinpath(APL_FILE_HISTORY)
+        self.enable_queue_history_global: bool = self.register.init_option(
+            section="AutoPlaylist",
+            option="SavePlayedHistoryGlobal",
+            dest="enable_queue_history_global",
+            default=ConfigDefaults.enable_queue_history_global,
+            getter="getboolean",
+            comment=_Dd(
+                "Enable saving all songs played by MusicBot to a global playlist file:  %(filename)s\n"
+                "This will contain all songs from all servers."
+            ),
+            comment_args={"filename": hist_file},
+        )
+        self.enable_queue_history_guilds: bool = self.register.init_option(
+            section="AutoPlaylist",
+            option="SavePlayedHistoryGuilds",
+            dest="enable_queue_history_guilds",
+            default=ConfigDefaults.enable_queue_history_guilds,
+            getter="getboolean",
+            comment=_Dd(
+                # TRANSLATORS:  [Server ID] is a descriptive placeholder, and can be translated.
+                "Enable saving songs played per-server to a playlist file:  %(basename)s[Server ID]%(ext)s"
+            ),
+            comment_args={
+                "basename": hist_file.with_name(hist_file.stem),
+                "ext": hist_file.suffix,
+            },
+        )
+        self.remove_ap: bool = self.register.init_option(
+            section="AutoPlaylist",
+            option="RemoveFromAPOnError",
+            dest="remove_ap",
+            default=ConfigDefaults.remove_ap,
+            getter="getboolean",
+            comment=_Dd(
+                "Enable MusicBot to automatically remove unplayable entries from the auto playlist."
+            ),
+        )
+
+        ########################################################################
+        # MusicBot
+        ########################################################################
+        self.autojoin_channels: Set[int] = self.register.init_option(
+            section="MusicBot",
+            option="AutojoinChannels",
+            dest="autojoin_channels",
+            default=ConfigDefaults.autojoin_channels,
+            getter="getidset",
+            comment=_Dd(
+                "A list of Voice Channel IDs that MusicBot should automatically join on start up.\n"
+                "Use spaces to separate multiple IDs."
             ),
         )
         self.save_videos: bool = self.register.init_option(
@@ -414,14 +782,6 @@ class Config:
                 "If SaveVideos is enabled, never purge auto playlist songs from the cache regardless of limits."
             ),
         )
-        self.now_playing_mentions: bool = self.register.init_option(
-            section="MusicBot",
-            option="NowPlayingMentions",
-            dest="now_playing_mentions",
-            default=ConfigDefaults.now_playing_mentions,
-            getter="getboolean",
-            comment=_Dd("Mention the user who added the song when it is played."),
-        )
         self.auto_summon: bool = self.register.init_option(
             section="MusicBot",
             option="AutoSummon",
@@ -430,117 +790,6 @@ class Config:
             getter="getboolean",
             comment=_Dd(
                 "Automatically join the owner if they are in an accessible voice channel when bot starts."
-            ),
-        )
-        self.auto_playlist: bool = self.register.init_option(
-            section="MusicBot",
-            option="UseAutoPlaylist",
-            dest="auto_playlist",
-            default=ConfigDefaults.auto_playlist,
-            getter="getboolean",
-            comment=_Dd(
-                "Enable MusicBot to automatically play music from the auto playlist when the queue is empty."
-            ),
-        )
-        self.auto_playlist_random: bool = self.register.init_option(
-            section="MusicBot",
-            option="AutoPlaylistRandom",
-            dest="auto_playlist_random",
-            default=ConfigDefaults.auto_playlist_random,
-            getter="getboolean",
-            comment=_Dd("Shuffles the auto playlist tracks before playing them."),
-        )
-        self.auto_playlist_autoskip: bool = self.register.init_option(
-            section="MusicBot",
-            option="AutoPlaylistAutoSkip",
-            dest="auto_playlist_autoskip",
-            default=ConfigDefaults.auto_playlist_autoskip,
-            getter="getboolean",
-            comment=_Dd(
-                "Enable automatic skip of auto playlist songs when a user plays a new song.\n"
-                "This only applies to the current playing song if it was added by the auto playlist."
-            ),
-        )
-        self.auto_playlist_remove_on_block: bool = self.register.init_option(
-            section="MusicBot",
-            option="AutoPlaylistRemoveBlocked",
-            dest="auto_playlist_remove_on_block",
-            default=ConfigDefaults.auto_playlist_remove_on_block,
-            getter="getboolean",
-            comment=_Dd(
-                "Remove songs from the auto playlist if they are found in the song block list."
-            ),
-        )
-        self.auto_pause: bool = self.register.init_option(
-            section="MusicBot",
-            option="AutoPause",
-            dest="auto_pause",
-            default=ConfigDefaults.auto_pause,
-            getter="getboolean",
-            comment="MusicBot will automatically pause playback when no users are listening.",
-        )
-        self.delete_messages: bool = self.register.init_option(
-            section="MusicBot",
-            option="DeleteMessages",
-            dest="delete_messages",
-            default=ConfigDefaults.delete_messages,
-            getter="getboolean",
-            comment=_Dd(
-                # TRANSLATORS: DeleteDelayShort and DeleteDelayLong should not be translated.
-                "Allow MusicBot to automatically delete messages it sends, after a delay.\n"
-                "Delay period is controlled by DeleteDelayShort and DeleteDelayLong."
-            ),
-        )
-        self.delete_invoking: bool = self.register.init_option(
-            section="MusicBot",
-            option="DeleteInvoking",
-            dest="delete_invoking",
-            default=ConfigDefaults.delete_invoking,
-            getter="getboolean",
-            comment=_Dd("Auto delete valid commands after a delay."),
-        )
-        self.delete_delay_short: float = self.register.init_option(
-            section="MusicBot",
-            option="DeleteDelayShort",
-            dest="delete_delay_short",
-            default=ConfigDefaults.delete_delay_short,
-            getter="getduration",
-            comment=_Dd(
-                "Sets the short period of seconds before deleting messages.\n"
-                "This period is used by messages that require no further interaction."
-            ),
-        )
-        self.delete_delay_long: float = self.register.init_option(
-            section="MusicBot",
-            option="DeleteDelayLong",
-            dest="delete_delay_long",
-            default=ConfigDefaults.delete_delay_long,
-            getter="getduration",
-            comment=_Dd(
-                "Sets the long delay period before deleting messages.\n"
-                "This period is used by interactive or long-winded messages, like search and help."
-            ),
-        )
-
-        self.persistent_queue: bool = self.register.init_option(
-            section="MusicBot",
-            option="PersistentQueue",
-            dest="persistent_queue",
-            default=ConfigDefaults.persistent_queue,
-            getter="getboolean",
-            comment=_Dd(
-                "Allow MusicBot to save the song queue, so queued songs will survive restarts."
-            ),
-        )
-        self.pre_download_next_song: bool = self.register.init_option(
-            section="MusicBot",
-            option="PreDownloadNextSong",
-            dest="pre_download_next_song",
-            default=ConfigDefaults.pre_download_next_song,
-            getter="getboolean",
-            comment=_Dd(
-                "Enable MusicBot to download the next song in the queue while a song is playing.\n"
-                "Currently this option does not apply to auto playlist or songs added to an empty queue."
             ),
         )
         self.status_message: str = self.register.init_option(
@@ -584,55 +833,6 @@ class Config:
                 "If enabled, MusicBot will save the track title to:  data/[Server ID]/current.txt"
             ),
         )
-        self.allow_author_skip: bool = self.register.init_option(
-            section="MusicBot",
-            option="AllowAuthorSkip",
-            dest="allow_author_skip",
-            default=ConfigDefaults.allow_author_skip,
-            getter="getboolean",
-            comment=_Dd(
-                "Allow the member who requested the song to skip it, bypassing votes."
-            ),
-        )
-        self.use_experimental_equalization: bool = self.register.init_option(
-            section="MusicBot",
-            option="UseExperimentalEqualization",
-            dest="use_experimental_equalization",
-            default=ConfigDefaults.use_experimental_equalization,
-            getter="getboolean",
-            comment=_Dd(
-                "Tries to use ffmpeg to get volume normalizing options for use in playback.\n"
-                "This option can cause delay between playing songs, as the whole track must be processed."
-            ),
-        )
-        self.embeds: bool = self.register.init_option(
-            section="MusicBot",
-            option="UseEmbeds",
-            dest="embeds",
-            default=ConfigDefaults.embeds,
-            getter="getboolean",
-            comment=_Dd("Allow MusicBot to format its messages as embeds."),
-        )
-        self.queue_length: int = self.register.init_option(
-            section="MusicBot",
-            option="QueueLength",
-            dest="queue_length",
-            default=ConfigDefaults.queue_length,
-            getter="getint",
-            comment=_Dd(
-                "The number of entries to show per-page when using q command to list the queue."
-            ),
-        )
-        self.remove_ap: bool = self.register.init_option(
-            section="MusicBot",
-            option="RemoveFromAPOnError",
-            dest="remove_ap",
-            default=ConfigDefaults.remove_ap,
-            getter="getboolean",
-            comment=_Dd(
-                "Enable MusicBot to automatically remove unplayable entries from the auto playlist."
-            ),
-        )
         self.show_config_at_start: bool = self.register.init_option(
             section="MusicBot",
             option="ShowConfigOnLaunch",
@@ -640,17 +840,6 @@ class Config:
             default=ConfigDefaults.show_config_at_start,
             getter="getboolean",
             comment=_Dd("Display MusicBot config settings in the logs at startup."),
-        )
-        self.legacy_skip: bool = self.register.init_option(
-            section="MusicBot",
-            option="LegacySkip",
-            dest="legacy_skip",
-            default=ConfigDefaults.legacy_skip,
-            getter="getboolean",
-            comment=_Dd(
-                # TRANSLATORS: InstaSkip should not be translated.
-                "Enable users with the InstaSkip permission to bypass skip voting and force skips."
-            ),
         )
         self.leavenonowners: bool = self.register.init_option(
             section="MusicBot",
@@ -661,37 +850,6 @@ class Config:
             comment=_Dd(
                 "If enabled, MusicBot will leave servers if the owner is not in their member list."
             ),
-        )
-        self.usealias: bool = self.register.init_option(
-            section="MusicBot",
-            option="UseAlias",
-            dest="usealias",
-            default=ConfigDefaults.usealias,
-            getter="getboolean",
-            comment=_Dd(
-                "If enabled, MusicBot will allow commands to have multiple names using data in:  config/aliases.json"
-            ),
-            comment_args={"filepath": DEFAULT_COMMAND_ALIAS_FILE},
-        )
-        self.footer_text: str = self.register.init_option(
-            section="MusicBot",
-            option="CustomEmbedFooter",
-            dest="footer_text",
-            default=ConfigDefaults.footer_text,
-            comment=_Dd(
-                # TRANSLATORS: UseEmbeds should not be translated.
-                "Replace MusicBot name/version in embed footer with custom text.\n"
-                "Only applied when UseEmbeds is enabled and it is not blank."
-            ),
-            default_is_empty=True,
-        )
-        self.remove_embed_footer: bool = self.register.init_option(
-            section="MusicBot",
-            option="RemoveEmbedFooter",
-            dest="remove_embed_footer",
-            default=ConfigDefaults.remove_embed_footer,
-            getter="getboolean",
-            comment=_Dd("Completely remove the footer from embeds."),
         )
         self.self_deafen: bool = self.register.init_option(
             section="MusicBot",
@@ -749,50 +907,6 @@ class Config:
                 "Set it to 0 to disable leaving in this way."
             ),
         )
-        self.searchlist: bool = self.register.init_option(
-            section="MusicBot",
-            option="SearchList",
-            dest="searchlist",
-            default=ConfigDefaults.searchlist,
-            getter="getboolean",
-            comment=_Dd(
-                "If enabled, users must indicate search result choices by sending a message instead of using reactions."
-            ),
-        )
-        self.defaultsearchresults: int = self.register.init_option(
-            section="MusicBot",
-            option="DefaultSearchResults",
-            dest="defaultsearchresults",
-            default=ConfigDefaults.defaultsearchresults,
-            getter="getint",
-            comment=_Dd(
-                "Sets the default number of search results to fetch when using the search command without a specific number."
-            ),
-        )
-
-        self.enable_options_per_guild: bool = self.register.init_option(
-            section="MusicBot",
-            option="EnablePrefixPerGuild",
-            dest="enable_options_per_guild",
-            default=ConfigDefaults.enable_options_per_guild,
-            getter="getboolean",
-            comment=_Dd(
-                # TRANSLATORS: setprefix should not be translated.
-                "Allow MusicBot to save a per-server command prefix, and enables the setprefix command."
-            ),
-        )
-
-        self.round_robin_queue: bool = self.register.init_option(
-            section="MusicBot",
-            option="RoundRobinQueue",
-            dest="round_robin_queue",
-            default=ConfigDefaults.defaultround_robin_queue,
-            getter="getboolean",
-            comment=_Dd(
-                "If enabled and multiple members are adding songs, MusicBot will organize playback for one song per member."
-            ),
-        )
-
         self.enable_network_checker: bool = self.register.init_option(
             section="MusicBot",
             option="EnableNetworkChecker",
@@ -804,61 +918,6 @@ class Config:
                 "This may be useful if you keep the bot joined to a channel or playing music 24/7.\n"
                 "MusicBot must be restarted to enable network testing.\n"
                 "By default this is disabled."
-            ),
-        )
-
-        # write_path not needed, used for display only.
-        hist_file = pathlib.Path(DEFAULT_PLAYLIST_DIR).joinpath(APL_FILE_HISTORY)
-        self.enable_queue_history_global: bool = self.register.init_option(
-            section="MusicBot",
-            option="SavePlayedHistoryGlobal",
-            dest="enable_queue_history_global",
-            default=ConfigDefaults.enable_queue_history_global,
-            getter="getboolean",
-            comment=_Dd(
-                "Enable saving all songs played by MusicBot to a global playlist file:  %(filename)s\n"
-                "This will contain all songs from all servers."
-            ),
-            comment_args={"filename": hist_file},
-        )
-        self.enable_queue_history_guilds: bool = self.register.init_option(
-            section="MusicBot",
-            option="SavePlayedHistoryGuilds",
-            dest="enable_queue_history_guilds",
-            default=ConfigDefaults.enable_queue_history_guilds,
-            getter="getboolean",
-            comment=_Dd(
-                # TRANSLATORS:  [Server ID] is a descriptive placeholder, and can be translated.
-                "Enable saving songs played per-server to a playlist file:  %(basename)s[Server ID]%(ext)s"
-            ),
-            comment_args={
-                "basename": hist_file.with_name(hist_file.stem),
-                "ext": hist_file.suffix,
-            },
-        )
-
-        self.enable_local_media: bool = self.register.init_option(
-            section="MusicBot",
-            option="EnableLocalMedia",
-            dest="enable_local_media",
-            default=ConfigDefaults.enable_local_media,
-            getter="getboolean",
-            comment=_Dd(
-                # TRANSLATORS: MediaFileDirectory should not be translated.
-                "Enable playback of local media files using the play command.\n"
-                "When enabled, users can use:  `play file://path/to/file.ext`\n"
-                "to play files from the local MediaFileDirectory path."
-            ),
-        )
-
-        self.auto_unpause_on_play: bool = self.register.init_option(
-            section="MusicBot",
-            option="UnpausePlayerOnPlay",
-            dest="auto_unpause_on_play",
-            default=ConfigDefaults.auto_unpause_on_play,
-            getter="getboolean",
-            comment=_Dd(
-                "Allow MusicBot to automatically unpause when play commands are used."
             ),
         )
 
@@ -896,42 +955,20 @@ class Config:
                 "Leave blank to use default, dynamically generated UA strings."
             ),
         )
-        self.ytdlp_use_oauth2: bool = self.register.init_option(
+        self.ytdlp_source_address: str = self.register.init_option(
             section="MusicBot",
-            option="YtdlpUseOAuth2",
-            dest="ytdlp_use_oauth2",
-            default=ConfigDefaults.ytdlp_use_oauth2,
-            getter="getboolean",
-            comment=_Dd(
-                "Experimental option to enable yt-dlp to use a YouTube account via OAuth2.\n"
-                "When enabled, you must use the generated URL and code to authorize an account.\n"
-                "The authorization token is then stored in the "
-                "`%(oauthfile)s` file.\n"
-                "This option should not be used when cookies are enabled.\n"
-                "Using a personal account may not be recommended.\n"
-                "Set yes to enable or no to disable."
-            ),
-            comment_args={"oauthfile": f"{DEFAULT_DATA_DIR}/{DATA_FILE_YTDLP_OAUTH2}"},
-        )
-        self.ytdlp_oauth2_url: str = self.register.init_option(
-            section="MusicBot",
-            option="YtdlpOAuth2URL",
-            dest="ytdlp_oauth2_url",
+            option="YtdlpSourceAddress",
+            dest="ytdlp_source_address",
+            default=ConfigDefaults.ytdlp_source_address,
             getter="getstr",
-            default=ConfigDefaults.ytdlp_oauth2_url,
             comment=_Dd(
-                "Optional YouTube video URL used at start-up for triggering OAuth2 authorization.\n"
-                "This starts the OAuth2 prompt early, rather than waiting for a song request.\n"
-                "The URL set here should be an accessible YouTube video URL.\n"
-                "Authorization must be completed before start-up will continue when this is set."
+                "Force yt-dlp to bind to a specific IP address or IP version on your system.\n"
+                "To force any available IPv4, set this to:  0.0.0.0\n"
+                "To force any available IPv6, set this to:  ::\n"
+                "To allow either IPv4 or v6, set this to:  *"
             ),
         )
-        # Was: [Credentials] >> YtdlpOAuth2ClientID
-        self.ytdlp_oauth2_client_id: str = ConfigDefaults.ytdlp_oauth2_client_id
-        # Was: Credentials] >> YtdlpOAuth2ClientSecret
-        self.ytdlp_oauth2_client_secret: str = ConfigDefaults.ytdlp_oauth2_client_secret
 
-        # Files
         self.user_blocklist_enabled: bool = self.register.init_option(
             section="MusicBot",
             option="EnableUserBlocklist",
@@ -942,6 +979,20 @@ class Config:
                 "Toggle the user block list feature, without emptying the block list."
             ),
         )
+        self.song_blocklist_enabled: bool = self.register.init_option(
+            section="MusicBot",
+            option="EnableSongBlocklist",
+            dest="song_blocklist_enabled",
+            default=ConfigDefaults.song_blocklist_enabled,
+            getter="getboolean",
+            comment=_Dd(
+                "Enable the song block list feature, without emptying the block list."
+            ),
+        )
+
+        ########################################################################
+        # Files
+        ########################################################################
         self.user_blocklist_file: pathlib.Path = self.register.init_option(
             section="Files",
             option="UserBlocklistFile",
@@ -954,17 +1005,6 @@ class Config:
             default_is_empty=True,
         )
         self.user_blocklist: UserBlocklist = UserBlocklist(self.user_blocklist_file)
-
-        self.song_blocklist_enabled: bool = self.register.init_option(
-            section="MusicBot",
-            option="EnableSongBlocklist",
-            dest="song_blocklist_enabled",
-            default=ConfigDefaults.song_blocklist_enabled,
-            getter="getboolean",
-            comment=_Dd(
-                "Enable the song block list feature, without emptying the block list."
-            ),
-        )
         self.song_blocklist_file: pathlib.Path = self.register.init_option(
             section="Files",
             option="SongBlocklistFile",
@@ -978,7 +1018,6 @@ class Config:
             default_is_empty=True,
         )
         self.song_blocklist: SongBlocklist = SongBlocklist(self.song_blocklist_file)
-
         self.auto_playlist_dir: pathlib.Path = self.register.init_option(
             section="Files",
             option="AutoPlaylistDirectory",
@@ -1050,32 +1089,6 @@ class Config:
                 "    https://docs.python.org/3/library/datetime.html#strftime-strptime-behavior"
             ),
         )
-
-        self.use_opus_audio: bool = self.register.init_option(
-            section="MusicBot",
-            option="UseOpusAudio",
-            dest="use_opus_audio",
-            default=ConfigDefaults.use_opus_audio,
-            getter="getboolean",
-            comment=_Dd(
-                "May reduce CPU usage by avoiding PCM-to-Opus encoding in python.\n"
-                "When enabled, volume is controlled via FFmpeg filter instead of python.\n"
-                "May cause a short delay when tracks first start for bitrate discovery."
-            ),
-        )
-        self.use_opus_probe: bool = self.register.init_option(
-            section="MusicBot",
-            option="UseOpusProbe",
-            dest="use_opus_probe",
-            default=ConfigDefaults.use_opus_probe,
-            getter="getboolean",
-            comment=_Dd(
-                "Similar to UseOpusAudio, but reduces CPU usage even more where possible.\n"
-                "If the media is already Opus encoded (like YouTube) no re-encoding is done.\n"
-                "This option will disable speed, volume, and UseExperimentalEqualization options."
-            ),
-        )
-
         #
         # end of config registry.
         #
@@ -1255,17 +1268,6 @@ class Config:
 
         if self.enable_local_media and not self.media_file_dir.is_dir():
             self.media_file_dir.mkdir(exist_ok=True)
-
-        if self.cookies_path.is_file():
-            log.warning(
-                "Cookies TXT file detected. MusicBot will pass them to yt-dlp.\n"
-                "Cookies are not recommended, may not be supported, and may totally break.\n"
-                "Copying cookies from your web-browser risks exposing personal data and \n"
-                "in the best case can result in your accounts being banned!\n\n"
-                "You have been warned!  Good Luck!  \U0001F596\n"
-            )
-            # make sure the user sees this.
-            time.sleep(3)
 
     async def async_validate(self, bot: "MusicBot") -> None:
         """
@@ -1494,6 +1496,7 @@ class ConfigDefaults:
     no_nowplaying_auto: bool = False
     nowplaying_channels: Set[int] = set()
     delete_nowplaying: bool = True
+    reply_and_mention: bool = True
 
     default_volume: float = 0.15
     default_speed: float = 1.0
@@ -1519,7 +1522,7 @@ class ConfigDefaults:
     status_include_paused: bool = False
     write_current_song: bool = False
     allow_author_skip: bool = True
-    use_opus_audio: bool = False
+    use_opus_audio: bool = True
     use_opus_probe: bool = False
     use_experimental_equalization: bool = False
     embeds: bool = True
@@ -1547,15 +1550,10 @@ class ConfigDefaults:
     auto_unpause_on_play: bool = False
     ytdlp_proxy: str = ""
     ytdlp_user_agent: str = ""
-    ytdlp_oauth2_url: str = ""
+    ytdlp_source_address: str = "*"
 
-    ytdlp_oauth2_client_id: str = (
-        "861556708454-d6dlm3lh05idd8npek18k6be8ba3oc68.apps.googleusercontent.com"
-    )
-    ytdlp_oauth2_client_secret: str = "SboVhoG9s0rNafixCSGGKXAT"
-
-    ytdlp_use_oauth2: bool = False
     pre_download_next_song: bool = True
+    default_search_service: str = "ytsearch"
 
     song_blocklist: Set[str] = set()
     user_blocklist: Set[int] = set()
@@ -2036,7 +2034,7 @@ class ConfigOptionRegistry:
         if getter == "getboolean":
             return "yes" if conf_value else "no"
 
-        if getter in ["getstrset", "getidset"] and isinstance(conf_value, set):
+        if getter in ["getstrset", "getidset"] and isinstance(conf_value, (list, set)):
             return ", ".join(str(x) for x in conf_value)
 
         if getter == "getdatasize" and isinstance(conf_value, int):
@@ -2105,6 +2103,8 @@ class ConfigOptionRegistry:
 
         markdown = ""
         for sect in self._parser.sections():
+            if sect not in md_sections:
+                continue
             opts = md_sections[sect]
             markdown += f"#### [{sect}]\n\n{''.join(opts)}\n\n"
 
@@ -2116,13 +2116,12 @@ class ConfigOptionRegistry:
             cu = configupdater.ConfigUpdater()
             cu.optionxform = str  # type: ignore
 
-            # TODO: shift this to a constant maybe...
-            # I hate hard-coding this, but it maintains the order of sections we want.
-            for section in ["Credentials", "Permissions", "Chat", "MusicBot", "Files"]:
+            # Add sections in order.
+            for section in MUSICBOT_CONFIG_SECTIONS_ORDERED:
                 cu.add_section(section)
 
             # add comments to head of file.
-            adder = cu["Credentials"].add_before
+            adder = cu[MUSICBOT_CONFIG_SECTIONS_ORDERED[0]].add_before
             head_comment = (
                 "This is the configuration file for MusicBot. Do not edit this file using Notepad.\n"
                 "Use Notepad++ or a code editor like Visual Studio Code.\n"
@@ -2484,20 +2483,61 @@ class ConfigRenameManager:
         # If not found, no error/warning is raised, it is assumed they are renamed already.
         self._remap: List[Tuple[str, str, str, str]] = [
             # fmt: off
-            # Rename LeaveAfterSong and Blacklist options  @  2024/02/21
-            ("MusicBot", "LeaveAfterSong", "MusicBot", "LeaveAfterQueueEmpty"),
+            # Update #1: Organize old config options into new sections.
+            # Chat Commands
+            ("Chat", "CommandPrefix",            "ChatCommands", "CommandPrefix"),  # noqa: E241
+            ("Chat", "CommandsByMention",        "ChatCommands", "CommandsByMention"),  # noqa: E241
+            ("Chat", "BindToChannels",           "ChatCommands", "BindToChannels"),  # noqa: E241
+            ("Chat", "AllowUnboundServers",      "ChatCommands", "AllowUnboundServers"),  # noqa: E241
+            ("MusicBot", "EnablePrefixPerGuild", "ChatCommands", "EnablePrefixPerGuild"),  # noqa: E241
+            ("MusicBot", "UseAlias",             "ChatCommands", "UseAlias"),  # noqa: E241
 
-            # Move chat-related to Chat section  @  2024/04/02
-            # Also renames UseAlias to UseCommandAlias for clarity.
-            ("MusicBot", "DeleteMessages",       "Chat", "DeleteMessages"),  # noqa: E241
-            ("MusicBot", "DeleteInvoking",       "Chat", "DeleteInvoking"),  # noqa: E241
-            ("MusicBot", "NowPlayingMentions",   "Chat", "NowPlayingMentions"),  # noqa: E241
-            ("MusicBot", "UseEmbeds",            "Chat", "UseEmbeds"),  # noqa: E241
-            ("MusicBot", "UseAlias",             "Chat", "UseCommandAlias"),  # noqa: E241
-            ("MusicBot", "CustomEmbedFooter",    "Chat", "CustomEmbedFooter"),  # noqa: E241
-            ("MusicBot", "EnablePrefixPerGuild", "Chat", "EnablePrefixPerGuild"),
-            ("MusicBot", "SearchList",           "Chat", "SearchList"),  # noqa: E241
-            ("MusicBot", "DefaultSearchResults", "Chat", "DefaultSearchResults"),
+            # Chat Responses
+            ("Chat", "DMNowPlaying",                "ChatResponses", "DMNowPlaying"),  # noqa: E241
+            ("Chat", "DisableNowPlayingAutomatic",  "ChatResponses", "DisableNowPlayingAutomatic"),  # noqa: E241
+            ("Chat", "NowPlayingChannels",          "ChatResponses", "NowPlayingChannels"),  # noqa: E241
+            ("Chat", "DeleteNowPlaying",            "ChatResponses", "DeleteNowPlaying"),  # noqa: E241
+            ("MusicBot", "NowPlayingMentions",      "ChatResponses", "NowPlayingMentions"),  # noqa: E241
+            ("MusicBot", "DeleteMessages",          "ChatResponses", "DeleteMessages"),  # noqa: E241
+            ("MusicBot", "DeleteInvoking",          "ChatResponses", "DeleteInvoking"),  # noqa: E241
+            ("MusicBot", "DeleteDelayShort",        "ChatResponses", "DeleteDelayShort"),  # noqa: E241
+            ("MusicBot", "DeleteDelayLong",         "ChatResponses", "DeleteDelayLong"),  # noqa: E241
+            ("MusicBot", "UseEmbeds",               "ChatResponses", "UseEmbeds"),  # noqa: E241
+            ("MusicBot", "QueueLength",             "ChatResponses", "QueueLength"),  # noqa: E241
+            ("MusicBot", "CustomEmbedFooter",       "ChatResponses", "CustomEmbedFooter"),  # noqa: E241
+            ("MusicBot", "RemoveEmbedFooter",       "ChatResponses", "RemoveEmbedFooter"),  # noqa: E241
+            ("MusicBot", "SearchList",              "ChatResponses", "SearchList"),  # noqa: E241
+            ("MusicBot", "DefaultSearchResults",    "ChatResponses", "DefaultSearchResults"),  # noqa: E241
+
+            # Playback
+            ("MusicBot", "AutoPause",                   "Playback", "AutoPause"),  # noqa: E241
+            ("MusicBot", "DefaultVolume",               "Playback", "DefaultVolume"),  # noqa: E241
+            ("MusicBot", "DefaultSpeed",                "Playback", "DefaultSpeed"),  # noqa: E241
+            ("MusicBot", "SkipsRequired",               "Playback", "SkipsRequired"),  # noqa: E241
+            ("MusicBot", "SkipRatio",                   "Playback", "SkipRatio"),  # noqa: E241
+            ("MusicBot", "PersistentQueue",             "Playback", "PersistentQueue"),  # noqa: E241
+            ("MusicBot", "PreDownloadNextSong",         "Playback", "PreDownloadNextSong"),  # noqa: E241
+            ("MusicBot", "AllowAuthorSkip",             "Playback", "AllowAuthorSkip"),  # noqa: E241
+            ("MusicBot", "UseExperimentalEqualization", "Playback", "UseExperimentalEqualization"),  # noqa: E241
+            ("MusicBot", "LegacySkip",                  "Playback", "LegacySkip"),  # noqa: E241
+            ("MusicBot", "RoundRobinQueue",             "Playback", "RoundRobinQueue"),  # noqa: E241
+            ("MusicBot", "EnableLocalMedia",            "Playback", "EnableLocalMedia"),  # noqa: E241
+            ("MusicBot", "UnpausePlayerOnPlay",         "Playback", "UnpausePlayerOnPlay"),  # noqa: E241
+            ("MusicBot", "UseOpusAudio",                "Playback", "UseOpusAudio"),  # noqa: E241
+            ("MusicBot", "UseOpusProbe",                "Playback", "UseOpusProbe"),  # noqa: E241
+
+            # Auto Playlist
+            ("MusicBot", "UseAutoPlaylist",             "AutoPlaylist", "UseAutoPlaylist"),  # noqa: E241
+            ("MusicBot", "AutoPlaylistRandom",          "AutoPlaylist", "AutoPlaylistRandom"),  # noqa: E241
+            ("MusicBot", "AutoPlaylistAutoSkip",        "AutoPlaylist", "AutoPlaylistAutoSkip"),  # noqa: E241
+            ("MusicBot", "AutoPlaylistRemoveBlocked",   "AutoPlaylist", "AutoPlaylistRemoveBlocked"),  # noqa: E241
+            ("MusicBot", "RemoveFromAPOnError",         "AutoPlaylist", "RemoveFromAPOnError"),  # noqa: E241
+            ("MusicBot", "SavePlayedHistoryGlobal",     "AutoPlaylist", "SavePlayedHistoryGlobal"),  # noqa: E241
+            ("MusicBot", "SavePlayedHistoryGuilds",     "AutoPlaylist", "SavePlayedHistoryGuilds"),  # noqa: E241
+
+            # MusicBot
+            ("Chat", "AutojoinChannels", "MusicBot", "AutojoinChannels"),
+            # End Update #1
             # fmt: on
         ]
         self.update_config_options()
@@ -2516,38 +2556,32 @@ class ConfigRenameManager:
         opt = cu.get(o_sect, o_opt)
         # Simply rename the config in-place if possible.
         if o_sect == n_sect:
-            cu[n_sect].insert_at(opt.container_idx).option(
-                n_opt,
-                opt.value,
-            )
-            cu.remove_option(o_sect, o_opt)
+            cu[n_sect][o_opt].key = n_opt
 
         # Move the option and comments.
         else:
-            opt = cu.get(o_sect, o_opt)
+            opt = cu[o_sect][o_opt]
+            cu[n_sect][n_opt] = opt.value
             blocks = []
             prev_block = opt.previous_block
             while prev_block is not None:
                 if not isinstance(prev_block, (Comment, Space)):
                     break
-                # prime the next block to inspect.
-                np_block = prev_block.previous_block
-                # detach this block for reuse.
-                block = prev_block.detach()
-                blocks.append(block)
-                # move on to the next block.
-                prev_block = np_block
+                if prev_block.has_container():
+                    next_up = prev_block.previous_block
+                    prev_block.detach()
+                else:
+                    next_up = None
+                blocks.append(prev_block)
+                prev_block = next_up
 
-            # Remove the old option, add new with the same value.
-            cu.remove_option(o_sect, o_opt)
-            cu[n_sect][n_opt] = opt.value
-            # Add the comments to the new option.
             blocks.reverse()
-            for block in blocks:
-                if isinstance(block, Comment):
-                    cu[n_sect][n_opt].add_before.comment(str(block))
-                if isinstance(block, Space):
-                    cu[n_sect][n_opt].add_before.space(len(block.lines))
+            for b in blocks:
+                if isinstance(b, Comment):
+                    cu[n_sect][n_opt].add_before.comment(str(b))
+                if isinstance(b, Space):
+                    cu[n_sect][n_opt].add_before.space(len(b.lines))
+            cu.remove_option(o_sect, o_opt)
 
     def update_config_options(self) -> None:
         """
@@ -2558,7 +2592,28 @@ class ConfigRenameManager:
             cu.optionxform = str  # type: ignore
             cu.read(self._cfg_file, encoding="utf8")
 
+            sections = MUSICBOT_CONFIG_SECTIONS_ORDERED
             updates = 0
+
+            # Make sure config has the required sections, in order.
+            for i, sect in enumerate(sections):
+                prv = ""
+                nxt = ""
+                if 0 < i < len(sections):
+                    prv = sections[i - 1]
+                if i < len(sections) - 2:
+                    nxt = sections[i + 1]
+
+                if not cu.has_section(sect):
+                    if prv and cu.has_section(prv):
+                        cu[prv].add_after.section(sect)
+                    elif nxt and cu.has_section(nxt):
+                        cu[nxt].add_before.section(sect)
+                    else:
+                        cu.add_section(sect)
+                    updates += 1
+
+            # check if we need to update any options.
             for item in self._remap:
                 if cu.has_option(item[0], item[1]):
                     updates += 1
@@ -2566,12 +2621,29 @@ class ConfigRenameManager:
 
             if updates:
                 log.debug("Upgrading config file with renamed options...")
-                # Ensure some spacing exists at the end of sections.
-                for sect in cu.iter_sections():
-                    if not isinstance(sect.last_block, Space):
-                        sect.add_after.space(2)
+                # Ensure spaces between sections and options.
+                for s in cu.iter_sections():
+                    # Section end spaces.
+                    if not isinstance(s.last_block, Space):
+                        s.add_after.space(2)
+
+                    # Option spacing.
+                    for opt in s.iter_options():
+                        if not isinstance(opt.next_block, Space):
+                            opt.add_after.space(1)
+
+                # backup original file.
+                dt = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+                bkp_file = self._cfg_file.with_suffix(f".ini.old_{dt}")
+                try:
+                    shutil.copy(self._cfg_file, bkp_file)
+                except OSError as e:
+                    raise RuntimeError(
+                        "Could not create a backup copy of options.ini file."
+                    ) from e
 
                 # write the changes to file.
+                # cu.first_block.add_before.comment("NOTICE:  Options have been renamed.")
                 cu.update_file()
 
         except (

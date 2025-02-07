@@ -8,25 +8,31 @@ from typing import List
 VERSION: str = ""
 try:
     # Get the last release tag, number of commits since, and g{commit_id} as string.
-    _VERSION_P1 = (
+    _VERSION_DESC = (
         subprocess.check_output(["git", "describe", "--tags", "--always"])
         .decode("ascii")
         .strip()
     )
+    # Get the branch name.
+    _VERSION_BRANCH = (
+        subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"])
+        .decode("ascii")
+        .strip()
+    )
     # Check if any tracked files are modified for -modded version flag.
-    _VERSION_P2 = (
+    _VERSION_MOD = (
         subprocess.check_output(
             ["git", "-c", "core.fileMode=false", "status", "-suno", "--porcelain"]
         )
         .decode("ascii")
         .strip()
     )
-    if _VERSION_P2:
-        _VERSION_P2 = "-modded"
+    if _VERSION_MOD:
+        _VERSION_MOD = "-modded"
     else:
-        _VERSION_P2 = ""
+        _VERSION_MOD = ""
 
-    VERSION = f"{_VERSION_P1}{_VERSION_P2}"
+    VERSION = f"{_VERSION_DESC}-{_VERSION_BRANCH}{_VERSION_MOD}"
 
 except (subprocess.SubprocessError, OSError, ValueError) as e:
     print(f"Failed setting version constant, reason:  {str(e)}")
@@ -66,7 +72,6 @@ DEFAULT_DATA_DIR: str = "data/"
 DATA_FILE_SERVERS: str = "server_names.txt"
 DATA_FILE_CACHEMAP: str = "playlist_cachemap.json"
 DATA_FILE_COOKIES: str = "cookies.txt"  # No support for this, go read yt-dlp docs.
-DATA_FILE_YTDLP_OAUTH2: str = "oauth2.token"
 DATA_GUILD_FILE_QUEUE: str = "queue.json"
 DATA_GUILD_FILE_CUR_SONG: str = "current.txt"
 DATA_GUILD_FILE_OPTIONS: str = "options.json"
@@ -124,33 +129,23 @@ DEFAULT_MAX_INFO_REQUEST_TIMEOUT: int = 10
 # Time to wait before starting pre-download when a new song is playing.
 DEFAULT_PRE_DOWNLOAD_DELAY: float = 4.0
 
-# Time in seconds to wait before oauth2 authorization fails.
-# This provides time to authorize as well as prevent process hang at shutdown.
-DEFAULT_YTDLP_OAUTH2_TTL: float = 180.0
-
-# Default / fallback scopes used for OAuth2 ytdlp plugin.
-DEFAULT_YTDLP_OAUTH2_SCOPES: str = (
-    "http://gdata.youtube.com https://www.googleapis.com/auth/youtube"
-)
-# Info Extractors to exclude from OAuth2 patching, when OAuth2 is enabled.
-YTDLP_OAUTH2_EXCLUDED_IES: List[str] = [
-    "YoutubeBaseInfoExtractor",
-    "YoutubeTabBaseInfoExtractor",
-]
-# Yt-dlp client creators that are not compatible with OAuth2 plugin.
-YTDLP_OAUTH2_UNSUPPORTED_CLIENTS: List[str] = [
-    "web_creator",
-    "android_creator",
-    "ios_creator",
-]
-# Additional Yt-dlp clients to add to the OAuth2 client list.
-YTDLP_OAUTH2_CLIENTS: List[str] = ["mweb"]
-
 # Discord and other API constants
 DISCORD_MSG_CHAR_LIMIT: int = 2000
 
 # Limit bitrate to this value if per-channel bitrate is higher than this.
 MUSICBOT_VOICE_MAX_KBITRATE: int = 512
+
+# Config sections for Options.ini file, in order.
+MUSICBOT_CONFIG_SECTIONS_ORDERED: List[str] = [
+    "Credentials",
+    "Permissions",
+    "ChatCommands",
+    "ChatResponses",
+    "Playback",
+    "AutoPlaylist",
+    "MusicBot",
+    "Files",
+]
 
 # Embed specifics
 MUSICBOT_EMBED_COLOR_NORMAL: str = "#7289DA"
@@ -158,17 +153,17 @@ MUSICBOT_EMBED_COLOR_ERROR: str = "#CC0000"
 
 
 EMOJI_CHECK_MARK_BUTTON: str = "\u2705"
-EMOJI_CROSS_MARK_BUTTON: str = "\u274E"
-EMOJI_STOP_SIGN: str = "\U0001F6D1"
+EMOJI_CROSS_MARK_BUTTON: str = "\u274e"
+EMOJI_STOP_SIGN: str = "\U0001f6d1"
 EMOJI_IDLE_ICON: str = "\U0001f634"  # same as \N{SLEEPING FACE}
-EMOJI_PLAY_ICON: str = "\u25B6"  # add \uFE0F to make button
-EMOJI_PAUSE_ICON: str = "\u23F8\uFE0F"  # add \uFE0F to make button
-EMOJI_LAST_ICON: str = "\u23ED\uFE0F"  # next track button
-EMOJI_FIRST_ICON: str = "\u23EE\uFE0F"  # last track button
-EMOJI_NEXT_ICON: str = "\u23E9"  # fast-forward button
-EMOJI_PREV_ICON: str = "\u23EA"  # rewind button
-EMOJI_RESTART_SOFT: str = "\u21A9\uFE0F"  # Right arrow curving left
-EMOJI_RESTART_FULL: str = "\U0001F504"  # counterclockwise arrows
-EMOJI_UPDATE_PIP: str = "\U0001F4E6"  # package / box
-EMOJI_UPDATE_GIT: str = "\U0001F5C3\uFE0F"  # card box
-EMOJI_UPDATE_ALL: str = "\U0001F310"  # globe with meridians
+EMOJI_PLAY_ICON: str = "\u25b6"  # add \uFE0F to make button
+EMOJI_PAUSE_ICON: str = "\u23f8\ufe0f"  # add \uFE0F to make button
+EMOJI_LAST_ICON: str = "\u23ed\ufe0f"  # next track button
+EMOJI_FIRST_ICON: str = "\u23ee\ufe0f"  # last track button
+EMOJI_NEXT_ICON: str = "\u23e9"  # fast-forward button
+EMOJI_PREV_ICON: str = "\u23ea"  # rewind button
+EMOJI_RESTART_SOFT: str = "\u21a9\ufe0f"  # Right arrow curving left
+EMOJI_RESTART_FULL: str = "\U0001f504"  # counterclockwise arrows
+EMOJI_UPDATE_PIP: str = "\U0001f4e6"  # package / box
+EMOJI_UPDATE_GIT: str = "\U0001f5c3\ufe0f"  # card box
+EMOJI_UPDATE_ALL: str = "\U0001f310"  # globe with meridians

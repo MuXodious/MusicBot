@@ -13,7 +13,6 @@ import ssl
 import subprocess
 import sys
 import time
-from base64 import b64decode
 from typing import Any, Callable, Coroutine, Dict, List, Optional, Tuple, Union
 
 import musicbot.logs
@@ -26,6 +25,8 @@ from musicbot.constants import (
     DEFAULT_LOGS_ROTATE_FORMAT,
     DEFAULT_MEDIA_FILE_DIR,
     DEFAULT_OPTIONS_FILE,
+    EXAMPLE_OPTIONS_FILE,
+    EXAMPLE_PERMS_FILE,
     MAXIMUM_LOGS_LIMIT,
 )
 from musicbot.constants import VERSION as BOTVERSION
@@ -352,7 +353,7 @@ def sanity_checks(args: argparse.Namespace) -> None:
     """
     log.info("Starting sanity checks")
     """Required Checks"""
-    # Make sure we're on Python 3.8+
+    # Make sure we're on Python 3.9+
     req_ensure_py3()
 
     # Make sure we're in a writable env
@@ -384,13 +385,13 @@ def req_ensure_py3() -> None:
     Verify the current running version of Python and attempt to find a
     suitable minimum version in the system if the running version is too old.
     """
-    log.info("Checking for Python 3.8+")
+    log.info("Checking for Python 3.9+")
 
-    if sys.version_info < (3, 8):
+    if sys.version_info < (3, 9):
         log.warning(
-            "Python 3.8+ is required. This version is %s", sys.version.split()[0]
+            "Python 3.9+ is required. This version is %s", sys.version.split()[0]
         )
-        log.warning("Attempting to locate Python 3.8...")
+        log.warning("Attempting to locate Python 3.9...")
         # Should we look for other versions than min-ver?
 
         pycom = None
@@ -401,15 +402,15 @@ def req_ensure_py3() -> None:
                 log.warning("Could not locate py.exe")
 
             try:
-                subprocess.check_output([pycom, "-3.8", '-c "exit()"'])
-                pycom = f"{pycom} -3.8"
+                subprocess.check_output([pycom, "-3.9", '-c "exit()"'])
+                pycom = f"{pycom} -3.9"
             except (
                 OSError,
                 PermissionError,
                 FileNotFoundError,
                 subprocess.CalledProcessError,
             ):
-                log.warning("Could not execute `py.exe -3.8` ")
+                log.warning("Could not execute `py.exe -3.9` ")
                 pycom = None
 
             if pycom:
@@ -418,10 +419,10 @@ def req_ensure_py3() -> None:
                 sys.exit(0)
 
         else:
-            log.info('Trying "python3.8"')
-            pycom = shutil.which("python3.8")
+            log.info('Trying "python3.9"')
+            pycom = shutil.which("python3.9")
             if not pycom:
-                log.warning("Could not locate python3.8 on path.")
+                log.warning("Could not locate python3.9 on path.")
 
             try:
                 subprocess.check_output([pycom, '-c "exit()"'])
@@ -435,12 +436,12 @@ def req_ensure_py3() -> None:
 
             if pycom:
                 log.info(
-                    "\nPython 3.8 found.  Re-launching bot using: %s run.py\n", pycom
+                    "\nPython 3.9 found.  Re-launching bot using: %s run.py\n", pycom
                 )
                 os.execlp(pycom, pycom, "run.py")
 
         log.critical(
-            "Could not find Python 3.8 or higher.  Please run the bot using Python 3.8"
+            "Could not find Python 3.9 or higher.  Please run the bot using Python version 3.9 to 3.13"
         )
         bugger_off()
 
@@ -475,26 +476,28 @@ def req_ensure_env() -> None:
     """
     log.info("Ensuring we're in the right environment")
 
-    if os.environ.get("APP_ENV") != "docker" and not os.path.isdir(
-        b64decode("LmdpdA==").decode("utf-8")
-    ):
+    if os.environ.get("APP_ENV") != "docker" and not os.path.isdir(".git"):
+        # NOTICE:
+        # if you feel like removing this check to "make it work"
+        # be aware this project depends on git for version information
+        # as well as ease of updating the bot.
         log.critical(
-            b64decode(
-                "Qm90IHdhc24ndCBpbnN0YWxsZWQgdXNpbmcgR2l0LiBSZWluc3RhbGwgdXNpbmcgaHR0cDovL2JpdC5seS9tdXNpY2JvdGRvY3Mu"
-            ).decode("utf-8")
+            "MusicBot was not installed using Git.\n"
+            "Check the documentation for install guides:\n"
+            "  https://just-some-bots.github.io/MusicBot/"
         )
         bugger_off()
 
     # Make sure musicbot exists and test if it can be imported.
     try:
         if not os.path.isdir("musicbot"):
-            raise RuntimeError('folder "musicbot" not found')
+            raise RuntimeError(_L('folder "musicbot" not found'))
 
         if not os.path.isfile("musicbot/__init__.py"):
-            raise RuntimeError("musicbot folder is not a Python module")
+            raise RuntimeError(_L("musicbot folder is not a Python module"))
 
         if not importlib.util.find_spec("musicbot"):
-            raise RuntimeError("musicbot module is not importable")
+            raise RuntimeError(_L("musicbot module is not importable"))
     except RuntimeError as e:
         log.critical("Failed environment check, %s", e)
         bugger_off()
@@ -705,6 +708,7 @@ def parse_cli_args() -> argparse.Namespace:
         "--lang",
         dest="lang_both",
         default=DEFAULT_I18N_LANG,
+        metavar="LOCALE",
         type=str,
         help=_L(
             "Override the default / system detected language for all text in MusicBot."
@@ -715,6 +719,7 @@ def parse_cli_args() -> argparse.Namespace:
         "--log_lang",
         dest="lang_logs",
         default=DEFAULT_I18N_LANG,
+        metavar="LOCALE",
         type=str,
         help=_L("Use this language for all server-side log messages from MusicBot."),
     )
@@ -723,6 +728,7 @@ def parse_cli_args() -> argparse.Namespace:
         "--msg_lang",
         dest="lang_msgs",
         default=DEFAULT_I18N_LANG,
+        metavar="LOCALE",
         type=str,
         help=_L(
             "Use this language for all messages sent to discord from MusicBot.\n"
@@ -778,6 +784,7 @@ def parse_cli_args() -> argparse.Namespace:
         "--logs-kept",
         dest="keep_n_logs",
         default=DEFAULT_LOGS_KEPT,
+        metavar="NUMBER",
         type=kept_logs_int,
         help=_L(
             "Specify how many log files to keep, between 0 and %s inclusive."
@@ -789,6 +796,7 @@ def parse_cli_args() -> argparse.Namespace:
         "--log-level",
         dest="log_level",
         default="NOTSET",
+        metavar="LEVEL",
         type=log_levels_int,
         help=_L("Override the log level settings set in config. Must be one of: %s")
         % (
@@ -799,6 +807,7 @@ def parse_cli_args() -> argparse.Namespace:
         "--log-rotate-fmt",
         dest="old_log_fmt",
         default=DEFAULT_LOGS_ROTATE_FORMAT,
+        metavar="FORMAT",
         type=str,
         help=_L(
             "Override the default date format used when rotating log files. "
@@ -812,12 +821,20 @@ def parse_cli_args() -> argparse.Namespace:
         "--write-dir",
         dest="global_writes_basedir",
         default="",
+        metavar="PATH",
         type=str,
         help=_L(
             "Supply a directory where MusicBot can store all mutable files.\n"
             "Essentially treats the install directory as read-only.\n"
             "MusicBot must have permission to create this directory.\n"
         ),
+    )
+
+    ap.add_argument(
+        "--mk-examples",
+        dest="make_examples",
+        action="store_true",
+        help="Update or create example config files and then exit. Useful if code is changed or examples are out-of-date for some reason.",
     )
 
     args = ap.parse_args()
@@ -921,7 +938,7 @@ def set_console_title() -> None:
     if os.name == "nt":
         try:
             # if colorama fails to import we can assume setup_logs didn't load it.
-            import colorama  # type: ignore[import-untyped]
+            import colorama
 
             # this is only available in colorama version 0.4.6+
             # which as it happens isn't required by colorlog.
@@ -999,6 +1016,10 @@ def main() -> None:
     # Handle startup checks, if they haven't been skipped.
     sanity_checks(cli_args)
 
+    # Make sure Config doesn't wig out when no config exists but we still want to generate examples.
+    if cli_args.make_examples and "MUSICBOT_TOKEN" not in os.environ:
+        os.environ["MUSICBOT_TOKEN"] = "Your Token Here"
+
     exit_signal: Union[RestartSignal, TerminateSignal, None] = None
     event_loop: Optional[asyncio.AbstractEventLoop] = None
     tried_requirementstxt: bool = False
@@ -1027,6 +1048,13 @@ def main() -> None:
             m = MusicBot(  # pylint: disable=possibly-used-before-assignment
                 use_certifi=use_certifi
             )
+
+            # Update example options / permissions as needed.
+            if cli_args.make_examples:
+                log.info("Updating example config files...")
+                m.config.register.write_default_ini(write_path(EXAMPLE_OPTIONS_FILE))
+                m.permissions.register.write_default_ini(write_path(EXAMPLE_PERMS_FILE))
+                raise TerminateSignal()
 
             # register system signal handlers with the event loop.
             if not getattr(event_loop, "_sig_handler_set", False):

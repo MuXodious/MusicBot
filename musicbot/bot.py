@@ -20,7 +20,7 @@ from io import BytesIO, StringIO
 from typing import TYPE_CHECKING, Any, DefaultDict, Dict, List, Optional, Set, Union
 
 import aiohttp
-import certifi  # type: ignore[import-untyped, unused-ignore]
+import certifi
 import discord
 import yt_dlp as youtube_dl  # type: ignore[import-untyped]
 
@@ -63,7 +63,10 @@ from .constants import (
     MUSICBOT_VOICE_MAX_KBITRATE,
 )
 from .constants import VERSION as BOTVERSION
-from .constants import VOICE_CLIENT_MAX_RETRY_CONNECT, VOICE_CLIENT_RECONNECT_TIMEOUT
+from .constants import (
+    VOICE_CLIENT_MAX_RETRY_CONNECT,
+    VOICE_CLIENT_RECONNECT_TIMEOUT,
+)
 from .constructs import ErrorResponse, GuildSpecificData, MusicBotResponse, Response
 from .entry import LocalFilePlaylistEntry, StreamPlaylistEntry, URLPlaylistEntry
 from .filecache import AudioFileCache
@@ -76,6 +79,7 @@ from .playlist import Playlist
 from .spotify import Spotify
 from .utils import (
     _func_,
+    check_extractor,
     command_helper,
     count_members_in_voice,
     dev_only,
@@ -89,9 +93,9 @@ from .utils import (
 
 # optional imports
 try:
-    import objgraph  # type: ignore[import-untyped]
+    import objgraph
 except ImportError:
-    objgraph = None
+    objgraph = None  # type: ignore[assignment]
 
 
 if TYPE_CHECKING:
@@ -254,7 +258,7 @@ class MusicBot(discord.Client):
         # context was not added until python 3.11
         if sys.version_info >= (3, 11):
             t = self.loop.create_task(coro, name=name, context=ctx)
-        else:  # assume 3.8 +
+        else:  # assume 3.9+
             t = self.loop.create_task(coro, name=name)
         self.task_pool.add(t)
 
@@ -348,16 +352,6 @@ class MusicBot(discord.Client):
                     e.message % e.fmt_args,
                 )
                 self.config.spotify_enabled = False
-
-        # trigger yt tv oauth2 authorization.
-        if self.config.ytdlp_use_oauth2 and self.config.ytdlp_oauth2_url:
-            log.warning(
-                "Experimental Yt-dlp OAuth2 plugin is enabled. This might break at any point!"
-            )
-            # could probably do this with items from an auto-playlist but meh.
-            await self.downloader.extract_info(
-                self.config.ytdlp_oauth2_url, download=False, process=True
-            )
 
         log.info("Initialized, now connecting to discord.")
         # this creates an output similar to a progress indicator.
@@ -1854,7 +1848,7 @@ class MusicBot(discord.Client):
 
         if reply_to and reply_to.channel == dest:
             send_kws["reference"] = reply_to.to_reference(fail_if_not_exists=False)
-            send_kws["mention_author"] = True
+            send_kws["mention_author"] = self.config.reply_and_mention
 
         if content.files:
             send_kws["files"] = content.files
@@ -2510,14 +2504,15 @@ class MusicBot(discord.Client):
                 "Detected missing config options!\n"
                 "\n"
                 "Problem:\n"
-                "  You config options file is missing some options.\n"
-                "  Default settings will be used for these options.\n"
-                "  Here is a list of options we didn't find:\n"
-                "  %(missing)s\n"
+                "  Your config options.ini file is missing some options.\n"
+                "  Default settings will be used for these options until you set them.\n"
+                "  Here is a list of options (with [section] names) we didn't find:\n"
+                "%(missing)s\n"
                 "\n"
                 "Solution:\n"
-                "  Copy new options from the example options file.\n"
-                "  Or use the config command to set and save them.\n\n",
+                "  Add the new options listed above to your options.ini file.\n"
+                "  You can do this with MusicBot config command, the configure.py tool, or any text editor.\n"
+                "  If you recently updated, check example_options.ini for documentation and default values.\n\n",
                 # fmt: on
                 {"missing": missing_list},
             )
@@ -3306,10 +3301,16 @@ class MusicBot(discord.Client):
             "{cmd} add all\n"
             + _Dd("    Adds the entire queue to the guilds playlist.\n"),
 
+            "{cmd} queue [NAME]\n"
+            + _Dd(
+                "    Add all tracks in the given auto playlist to the normal playback queue.\n"
+                "    If playlist name is omitted, the currently loaded playlist is used.\n"
+            ),
+
             "{cmd} clear [NAME]\n"
             + _Dd(
                 "    Clear all songs from the named playlist file.\n"
-                "    If name is omitted, the currently loaded playlist is emptied.\n"
+                "    If playlist name is omitted, the currently loaded playlist is emptied.\n"
             ),
 
             "{cmd} show\n"
@@ -3323,9 +3324,16 @@ class MusicBot(discord.Client):
             "{cmd} set <NAME>\n"
             + _Dd("    Set a playlist as default for this guild and reloads the guild auto playlist.\n"),
 
+            "{cmd} reload [NAME]\n"
+            + _Dd(
+                "    Reload the given playlist from disk into memory, but does not update the current auto playlist queue."
+            ),
         ],
         # fmt: on
-        desc=_Dd("Manage auto playlist files and per-guild settings."),
+        desc=_Dd(
+            "Manage auto playlist files and per-guild settings.\n"
+            "Auto playlists use a their own queue, only playing when the main queue is empty."
+        ),
         remap_subs={"+": "add", "-": "remove"},
     )
     async def cmd_autoplaylist(
@@ -3333,6 +3341,9 @@ class MusicBot(discord.Client):
         ssd_: Optional[GuildSpecificData],
         guild: discord.Guild,
         author: discord.Member,
+        channel: GuildMessageableChannels,
+        voice_channel: Optional[VoiceableChannel],
+        message: discord.Message,
         _player: Optional[MusicPlayer],
         player: MusicPlayer,
         option: str,
@@ -3341,7 +3352,6 @@ class MusicBot(discord.Client):
         """
         Manage auto playlists globally and per-guild.
         """
-        # TODO: add a method to display the current auto playlist setting in chat.
         option = option.lower()
         if option not in [
             "+",
@@ -3353,6 +3363,7 @@ class MusicBot(discord.Client):
             "set",
             "restart",
             "queue",
+            "reload",
         ]:
             raise exceptions.CommandError(
                 "Invalid sub-command given. Use `help autoplaylist` for usage examples.",
@@ -3496,6 +3507,87 @@ class MusicBot(discord.Client):
                 _D("The playlist `%(playlist)s` has been cleared.", ssd_)
                 % {"playlist": plname}
             )
+
+        if option == "queue":
+            if not voice_channel:
+                raise exceptions.CommandError(
+                    "You must be in a voice channel to use this command."
+                )
+            if not opt_url and ssd_:
+                plname = ssd_.autoplaylist.filename
+            else:
+                plname = opt_url.lower()
+                if not plname.endswith(".txt"):
+                    plname += ".txt"
+                if not self.playlist_mgr.playlist_exists(plname):
+                    raise exceptions.CommandError(
+                        "No playlist file exists with the name: `%(playlist)s`",
+                        fmt_args={"playlist": plname},
+                    )
+
+            premsg = _D(
+                "The tracks in playlist `%(playlist)s` will be added to the queue.\n"
+                "Please wait while MusicBot processes the playlist.",
+                ssd_,
+            ) % {"playlist": plname}
+            await self.safe_send_message(
+                channel,
+                Response(premsg, reply_to=message),
+            )
+
+            try:
+                info = await self.downloader.extract_info(
+                    f"mbapl://{plname}", download=False, process=True
+                )
+            except Exception as e:
+                # TODO: i18n for translated exceptions.
+                info = None
+                log.exception("Issue with extract_info(): ")
+                if isinstance(e, exceptions.MusicbotException):
+                    raise
+                raise exceptions.CommandError(
+                    "Failed to extract info due to error:\n%(raw_error)s",
+                    fmt_args={"raw_error": e},
+                ) from e
+
+            entries: List[EntryTypes] = []
+            if info:
+                _player = self.get_player_in(guild)
+                if _player is None:
+                    player = await self.get_player(voice_channel, create=True)
+                else:
+                    player = _player
+                entries, _pos = await player.playlist.import_from_info(
+                    info,
+                    head=False,
+                    channel=channel,
+                    author=author,
+                )
+                if len(entries) and player.is_stopped:
+                    player.play()
+
+            return Response(
+                _D(
+                    "Added %(number)d track(s) to the queue from playlist `%(playlist)s`",
+                    ssd_,
+                )
+                % {"number": len(entries), "playlist": plname}
+            )
+
+        if option == "reload":
+            if not opt_url and ssd_:
+                plname = ssd_.autoplaylist.filename
+            else:
+                plname = opt_url.lower()
+                if not plname.endswith(".txt"):
+                    plname += ".txt"
+                if not self.playlist_mgr.playlist_exists(plname):
+                    raise exceptions.CommandError(
+                        "No playlist file exists with the name: `%(playlist)s`",
+                        fmt_args={"playlist": plname},
+                    )
+            await self.playlist_mgr.get_playlist(plname).load()
+            return Response(_D("The playlist has been reloaded from disk.", ssd_))
 
         return None
 
@@ -4277,6 +4369,8 @@ class MusicBot(discord.Client):
             song_url = " ".join([song_url, *leftover_args])
             leftover_args = []  # prevent issues later.
             self._do_song_blocklist_check(song_url)
+            if song_url:
+                song_url = f"{self.config.default_search_service}:{song_url}"
 
         # Validate spotify links are supported before we try them.
         if "open.spotify.com" in song_url.lower():
@@ -4333,7 +4427,7 @@ class MusicBot(discord.Client):
 
             # if the result has "entries" but it's empty, it might be a failed search.
             if "entries" in info and not info.entry_count:
-                if info.extractor.startswith("youtube:search"):
+                if check_extractor(info.extractor, "youtube:search"):
                     # TOOD: UI, i18n stuff
                     raise exceptions.CommandError(
                         "YouTube search returned no results for:  %(url)s",
@@ -4572,6 +4666,9 @@ class MusicBot(discord.Client):
             "- yt, youtube (default)\n"
             "- sc, soundcloud\n"
             "- yh, yahoo\n"
+            "- gv, google\n"
+            "- nv, nico\n"
+            "- bb, bili\n"
         ),
     )
     async def cmd_search(
@@ -4613,20 +4710,27 @@ class MusicBot(discord.Client):
 
         argcheck()
 
-        service = "youtube"
+        service = self.config.default_search_service
         items_requested = self.config.defaultsearchresults
         max_items = permissions.max_search_items
         services = {
+            "bili": "bilisearch",
+            "bb": "bilisearch",
+            "nico": "nicosearch",
+            "nv": "nicosearch",
             "youtube": "ytsearch",
+            "google": "gvsearch",
             "soundcloud": "scsearch",
             "yahoo": "yvsearch",
             "yt": "ytsearch",
             "sc": "scsearch",
             "yh": "yvsearch",
+            "gv": "gvsearch",
         }
+        service_keys = [*services.keys(), *list(set(services.values()))]
 
         # handle optional [SERVICE] arg
-        if leftover_args[0] in services:
+        if leftover_args[0] in service_keys:
             service = leftover_args.pop(0)
             argcheck()
 
@@ -4652,7 +4756,7 @@ class MusicBot(discord.Client):
             leftover_args[-1] = leftover_args[-1].rstrip(lchar)
 
         ssd = self.server_data[guild.id]
-        srvc = services[service]
+        srvc = services.get(service, service)
         args_str = " ".join(leftover_args)
         search_query = f"{srvc}{items_requested}:{args_str}"
 
@@ -5772,25 +5876,20 @@ class MusicBot(discord.Client):
 
         # Show missing options with help text.
         if option == "missing":
-            missing = ""
-            for opt in self.config.register.ini_missing_options:
-                missing += _D(
-                    "**Missing Option:** `%(config)s`\n"
-                    "```\n"
-                    "%(comment)s\n"
-                    "Default is set to:  %(default)s"
-                    "```\n",
-                    ssd_,
-                ) % {
-                    "config": opt,
-                    "comment": opt.comment,
-                    "default": opt.default,
-                }
-            if not missing:
+            missed = ""
+            for opt in sorted(self.config.register.ini_missing_options, key=str):
+                missed += f"{opt}\n"  # pylint: disable=consider-using-join
+
+            if not missed:
                 missing = _D(
                     "*All config options are present and accounted for!*",
                     ssd_,
                 )
+            else:
+                missing = _D(
+                    "**Missing Options:**\n```\n%(missing)s```",
+                    ssd_,
+                ) % {"missing": missed}
 
             return Response(
                 missing,
@@ -5961,6 +6060,13 @@ class MusicBot(discord.Client):
                 )
             # TODO: perhaps make use of currently unused display value for empty configs.
             cur_val, ini_val, disp_val = self.config.register.get_values(opt)
+            cur_val = str(cur_val)
+            ini_val = str(ini_val)
+            if not cur_val:
+                cur_val = " " if not disp_val else disp_val
+            if not ini_val:
+                ini_val = " " if not disp_val else disp_val
+
             return Response(
                 _D(
                     "**Option:** `%(config)s`\n"
@@ -5970,8 +6076,8 @@ class MusicBot(discord.Client):
                 )
                 % {
                     "config": opt,
-                    "loaded": cur_val if cur_val == "" else disp_val,
-                    "ini": ini_val if ini_val == "" else disp_val,
+                    "loaded": cur_val,
+                    "ini": ini_val,
                 }
             )
 
@@ -6243,7 +6349,7 @@ class MusicBot(discord.Client):
             tracks_list += _D(
                 "**Entry #%(index)s:**"
                 "Title: `%(title)s`\n"
-                "Added by: `%(user)s\n\n",
+                "Added by: `%(user)s`\n\n",
                 ssd_,
             ) % {"index": idx, "title": _D(item.title, ssd_), "user": added_by}
 
@@ -7465,6 +7571,7 @@ class MusicBot(discord.Client):
 
         await channel.typing()
 
+        data: Any = None
         if func == "growth":
             f = StringIO()
             objgraph.show_growth(limit=10, file=f)
@@ -8298,6 +8405,11 @@ class MusicBot(discord.Client):
 
             if params.pop("leftover_args", None):
                 handler_kwargs["leftover_args"] = args
+
+            # special case to auto populate "song_url" with attachment url.
+            if params.get("song_url", None) and message.attachments and not args:
+                params.pop("song_url")
+                handler_kwargs["song_url"] = message.attachments[0].url
 
             for key, param in list(params.items()):
                 # parse (*args) as a list of args

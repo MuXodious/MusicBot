@@ -3,7 +3,6 @@ import copy
 import datetime
 import functools
 import hashlib
-import importlib
 import logging
 import os
 import pathlib
@@ -23,8 +22,9 @@ from yt_dlp.utils import UnsupportedError
 
 from .constants import DEFAULT_MAX_INFO_DL_THREADS, DEFAULT_MAX_INFO_REQUEST_TIMEOUT
 from .exceptions import ExtractionError, MusicbotException
+from .i18n import _L
 from .spotify import Spotify
-from .ytdlp_oauth2_plugin import enable_ytdlp_oauth2_plugin
+from .utils import check_extractor
 
 if TYPE_CHECKING:
     from multidict import CIMultiDictProxy
@@ -81,7 +81,7 @@ ytdl_format_options_immutable = MappingProxyType(
         # extract_flat speeds up extract_info by only listing playlist entries rather than extracting them as well.
         "extract_flat": "in_playlist",
         "default_search": "auto",
-        "source_address": "0.0.0.0",
+        "source_address": None,
         "usenetrc": True,
         "no_color": True,
         "retries": 1,
@@ -114,6 +114,14 @@ class Downloader:
             max_workers=DEFAULT_MAX_INFO_DL_THREADS,
             thread_name_prefix="MB_Downloader",
         )
+        self._supported_search = [
+            "ytsearch",  # YouTube search
+            "gvsearch",  # Google Video search
+            "yvsearch",  # Yahoo video search
+            "scsearch",  # soundcloud search
+            "bilisearch",  # bilibili search
+            "nicosearch",  # nico video search
+        ]
 
         # force ytdlp and HEAD requests to use the same UA string.
         # If the constant is set, use that, otherwise use dynamic selection.
@@ -126,6 +134,10 @@ class Downloader:
         # Copy immutable dict and use the mutable copy for everything else.
         ytdl_format_options = ytdl_format_options_immutable.copy()
         ytdl_format_options["http_headers"] = self.http_req_headers
+
+        # apply source address settings.
+        if bot.config.ytdlp_source_address != "*":
+            ytdl_format_options["source_address"] = bot.config.ytdlp_source_address
 
         # enable verbose ytdlp logs if debug mode is enabled.
         if bot.config.debug_mode:
@@ -146,37 +158,6 @@ class Downloader:
         if bot.config.ytdlp_proxy:
             log.info("Yt-dlp will use your configured proxy server.")
             ytdl_format_options["proxy"] = bot.config.ytdlp_proxy
-
-        if bot.config.ytdlp_use_oauth2:
-            # set the login info so oauth2 is prompted.
-            ytdl_format_options["username"] = "mb_oauth2"
-            ytdl_format_options["password"] = ""
-            # ytdl_format_options["extractor_args"] = {
-            #    "youtubetab": {"skip": ["authcheck"]}
-            # }
-
-            # check if the original plugin is installed, and use it instead of ours.
-            # It's worth doing this because our version might fail to work,
-            # even if the original causes infinite loop hangs while auth is pending...
-            try:
-                oauth_spec = importlib.util.find_spec(
-                    "yt_dlp_plugins.extractor.youtubeoauth"
-                )
-            except ModuleNotFoundError:
-                oauth_spec = None
-
-            if oauth_spec is not None:
-                log.warning(
-                    "Original OAuth2 plugin is installed and will be used instead.\n"
-                    "This may cause MusicBot to not close completely, or hang pending authorization!\n"
-                    "To close MusicBot, you must manually Kill the MusicBot process!\n"
-                    "Yt-dlp is being set to show warnings and other log messages, to show the Auth code.\n"
-                    "Uninstall the yt-dlp-youtube-oauth2 package to use integrated OAuth2 features instead."
-                )
-                ytdl_format_options["quiet"] = False
-                ytdl_format_options["no_warnings"] = False
-            else:
-                enable_ytdlp_oauth2_plugin(self.bot.config)
 
         if self.download_folder:
             # print("setting template to " + os.path.join(download_folder, otmpl))
@@ -391,6 +372,10 @@ class Downloader:
         ):
             return self._return_local_media(song_subject)
 
+        if song_subject.lower().startswith("mbapl://"):
+            log.debug("AutoPlaylist requested:  %s", song_subject)
+            return await self._return_autoplaylist(song_subject)
+
         # Hash the URL for use as a unique ID in file paths.
         # but ignore services with multiple URLs for the same media.
         song_subject_hash = ""
@@ -507,7 +492,8 @@ class Downloader:
                     song_subject, process
                 )
                 if data["_type"] == "url":
-                    song_subject = data["search_terms"]
+                    song_subject = f"{self.bot.config.default_search_service}:"
+                    song_subject += data["search_terms"]
                 elif data["_type"] == "playlist":
                     return data
 
@@ -570,14 +556,15 @@ class Downloader:
         # This prevents single-entry searches being processed like a playlist later.
         # However we must preserve the list behavior when using cmd_search.
         if (
-            data.get("extractor", "").startswith("youtube:search")
+            check_extractor(data.get("extractor", ""), "search")
             and len(data.get("entries", [])) == 1
             and isinstance(data.get("entries", None), list)
             and data.get("playlist_count", 0) == 1
-            and not song_subject.startswith("ytsearch")
+            and not any(song_subject.startswith(e) for e in self._supported_search)
         ):
             log.noise(  # type: ignore[attr-defined]
-                "Extractor youtube:search returned single-entry result, replacing base info with entry info."
+                "Extractor %(extractor)s returned single-entry result, replacing base info with entry info.",
+                {"extractor": data.get("extractor", "__unknown__")},
             )
             entry_info = copy.deepcopy(data["entries"][0])
             for key in entry_info:
@@ -619,7 +606,7 @@ class Downloader:
             {
                 "__input_subject": song_subject,
                 "__header_data": None,
-                "__expected_filename": local_file_path,
+                "__expected_filename": str(local_file_path),
                 "_type": "local",
                 # "original_url": song_subject,
                 "extractor": "local:musicbot",
@@ -627,6 +614,109 @@ class Downloader:
                 # Getting a "good" title for the track will take some serious consideration...
                 "title": local_file_path.name,
                 "url": corrected_fie_uri,
+            }
+        )
+
+    async def _return_autoplaylist(self, song_subject: str) -> "YtdlpResponseDict":
+        """Converts an autoplaylist file into a usable playlist result."""
+        plname = song_subject[8:]
+        if not self.bot.playlist_mgr.playlist_exists(plname):
+            raise MusicbotException("The playlist does not exist.")
+
+        pl = self.bot.playlist_mgr.get_playlist(plname)
+        if not pl.loaded:
+            await pl.load()
+
+        # terms used to trigger URL processing.
+        pterms = ["playlist", "bandcamp.com/album"]
+
+        # process each playlist entries.
+        entries_data: List[Dict[str, Any]] = []
+        for track in pl:
+            if not self.bot.loop or (self.bot.loop and self.bot.loop.is_closed()):
+                return YtdlpResponseDict({})
+            if self.bot.logout_called:
+                return YtdlpResponseDict({})
+
+            # If the track is already a URL, maybe skip it...
+            # Some URLs, like playlists, may want to be extracted here, instead.
+            # This method will prevent queue estimations.
+            song_url = self.get_url_or_none(track)
+            if song_url and all(x not in song_url.lower() for x in pterms):
+                entries_data.append(
+                    {
+                        "_type": "url",
+                        "extractor": "autoplaylist:musicbot",
+                        "extractor_key": "AutoPlaylistEntry",
+                        "__header_data": None,
+                        "__input_subject": track,
+                        "url": song_url,
+                    }
+                )
+                continue
+
+            # extract with ytdlp
+            try:
+                info = await self.extract_info(track, download=False, process=True)
+            except (
+                youtube_dl.utils.YoutubeDLError,
+                youtube_dl.utils.DownloadError,
+            ) as e:
+                log.error(
+                    'Error while processing song "%(url)s":  %(raw_error)s',
+                    {"url": track, "raw_error": e},
+                )
+                continue
+
+            except ExtractionError as e:
+                log.error(
+                    'Error extracting song "%(url)s": %(raw_error)s',
+                    {
+                        "url": track,
+                        "raw_error": _L(e.message) % e.fmt_args,
+                    },
+                    exc_info=True,
+                )
+                continue
+
+            except MusicbotException as e:
+                if track.lower().startswith("file://"):
+                    log.error(
+                        "Could not process track '%(track)s' due to: %(raw_error)s",
+                        {
+                            "track": track,
+                            "raw_error": _L(e.message) % e.fmt_args,
+                        },
+                    )
+                    continue
+                # else, just bail.
+                log.exception(
+                    "MusicBot needs to stop the auto playlist extraction and bail."
+                )
+                break
+            except Exception:  # pylint: disable=broad-exception-caught
+                log.exception(
+                    "MusicBot got an unhandled exception while adding auto playlist to the queue."
+                )
+                break
+
+            # Process playlists
+            if info.has_entries:
+                entries_data.extend(info.get_entries_dicts())
+
+            # process single entries.
+            else:
+                entries_data.append(info.data.copy())
+
+        return YtdlpResponseDict(
+            {
+                "__input_subject": f"apl://{pl.filename}",
+                "__header_data": None,
+                "_type": "playlist",
+                "extractor": "autoplaylist:musicbot",
+                "extractor_key": "AutoPlaylist",
+                "entries": entries_data,
+                "playlist_count": len(entries_data),
             }
         )
 
