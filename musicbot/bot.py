@@ -331,27 +331,10 @@ class MusicBot(discord.Client):
                 self.config.spotify_enabled = False
                 time.sleep(5)  # make sure they see the problem
         else:
-            try:
-                log.warning(
-                    "The config did not have Spotify app credentials, attempting to use guest mode."
-                )
-                self.spotify = Spotify(
-                    None, None, aiosession=self.session, loop=self.loop
-                )
-                if not await self.spotify.has_token():
-                    log.warning("Spotify did not provide us with a token. Disabling.")
-                    self.config.spotify_enabled = False
-                else:
-                    log.info(
-                        "Authenticated with Spotify successfully using guest mode."
-                    )
-                    self.config.spotify_enabled = True
-            except exceptions.SpotifyError as e:
-                log.warning(
-                    "Could not start Spotify client using guest mode. Details: %s.",
-                    e.message % e.fmt_args,
-                )
-                self.config.spotify_enabled = False
+            log.warning(
+                "Your config does not have Spotify app credentials. Spotify support will not be available."
+            )
+            self.config.spotify_enabled = False
 
         log.info("Initialized, now connecting to discord.")
         # this creates an output similar to a progress indicator.
@@ -1174,9 +1157,21 @@ class MusicBot(discord.Client):
                     if potential_channel and potential_channel.guild == guild:
                         np_channel = potential_channel
                         break
+            elif self.config.bound_channels:
+                for potential_channel_id in self.config.bound_channels:
+                    potential_channel = self.get_channel(potential_channel_id)
+                    if isinstance(potential_channel, discord.abc.PrivateChannel):
+                        continue
 
-            if not np_channel and last_np_msg:
-                np_channel = last_np_msg.channel
+                    if not isinstance(potential_channel, discord.abc.Messageable):
+                        continue
+
+                    if potential_channel and potential_channel.guild == guild:
+                        np_channel = potential_channel
+                        break
+
+            if not np_channel and ssd_.last_np_channel:
+                np_channel = ssd_.last_np_channel  # type: ignore[assignment]
 
         content = Response("")
         if entry.thumbnail_url:
@@ -3336,7 +3331,7 @@ class MusicBot(discord.Client):
         # fmt: on
         desc=_Dd(
             "Manage auto playlist files and per-guild settings.\n"
-            "Auto playlists use a their own queue, only playing when the main queue is empty."
+            "Auto playlists use their own queue, only playing when the main queue is empty."
         ),
         remap_subs={"+": "add", "-": "remove"},
     )
@@ -4431,17 +4426,18 @@ class MusicBot(discord.Client):
 
             # if the result has "entries" but it's empty, it might be a failed search.
             if "entries" in info and not info.entry_count:
-                if check_extractor(info.extractor, "youtube:search"):
+                if check_extractor(info.extractor, "search"):
                     # TOOD: UI, i18n stuff
                     raise exceptions.CommandError(
-                        "YouTube search returned no results for:  %(url)s",
-                        fmt_args={"url": song_url},
+                        "Search returned no results with %(extractor)s for:  %(url)s",
+                        fmt_args={"url": song_url, "extractor": info.extractor},
                     )
 
             # If the result has usable entries, we assume it is a playlist
+            # but with only one entry is may be a search result.
             listlen = 1
             track_title = ""
-            if info.has_entries:
+            if info.has_entries and info.entry_count > 1:
                 await self._do_playlist_checks(player, author, info)
 
                 num_songs = info.playlist_count or info.entry_count
@@ -6340,6 +6336,7 @@ class MusicBot(discord.Client):
 
         # add the tracks to the embed fields
         tracks_list = ""
+        tracks_per_page = 0
         queue_segment = list(player.playlist.entries)[start_index:end_index]
         for idx, item in enumerate(queue_segment, starting_at):
             if item == player.current_entry:
@@ -6351,12 +6348,31 @@ class MusicBot(discord.Client):
             if item.channel and item.author:
                 added_by = item.author.name
 
-            tracks_list += _D(
+            # shorten the titles to get more tracks in the list.
+            title = item.title
+            if len(item.title) > 40:
+                title = item.title[:40] + " ..."
+
+            next_track_list = _D(
                 "**Entry #%(index)s:**"
                 "Title: `%(title)s`\n"
                 "Added by: `%(user)s`\n\n",
                 ssd_,
-            ) % {"index": idx, "title": _D(item.title, ssd_), "user": added_by}
+            ) % {"index": idx, "title": _D(title, ssd_), "user": added_by}
+            # We limit the track list, and leave extra space for the rest of the description text.
+            if (len(tracks_list) + len(next_track_list)) < 3840:
+                tracks_per_page += 1
+                tracks_list += next_track_list
+
+        if (
+            self.config.queue_length > tracks_per_page
+            and total_entry_count > self.config.queue_length
+        ):
+            log.warning(
+                "You may have QueueLength set too high! "
+                "The setting is %(option)d but we could only list %(count)d tracks.",
+                {"option": self.config.queue_length, "count": tracks_per_page},
+            )
 
         embed = Response(
             _D(
