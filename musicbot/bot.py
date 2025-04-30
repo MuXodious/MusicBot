@@ -5312,6 +5312,7 @@ class MusicBot(discord.Client):
     async def cmd_remove(
         self,
         ssd_: Optional[GuildSpecificData],
+        guild: discord.Guild,
         user_mentions: UserMentions,
         author: discord.Member,
         permissions: PermissionGroup,
@@ -5320,8 +5321,17 @@ class MusicBot(discord.Client):
         leftover_args: List[str] = [],
     ) -> CommandResponse:
         """
-        Command to remove entries from the player queue using relative IDs or LIFO method.
+        Command to remove entries from the player queue.
+        You can:
+        - Provide one position: `{command_prefix}remove 3` removes song at position 3.
+        - Provide two positions: `{command_prefix}remove 3 6` removes songs 3 through 6.
+        - Mention a user: `{command_prefix}remove @user` removes their entries.
+        - Provide nothing: `{command_prefix}remove` removes the last song. (LIFO-style)
         """
+        # add abort if no player to make mypy happy
+        if not player:
+            log.warning(f"No player for {guild}!")
+            return
 
         if not player.playlist.entries:
             raise exceptions.CommandError("Nothing in the queue to remove!")
@@ -5367,7 +5377,7 @@ class MusicBot(discord.Client):
 
             return Response(
                 _D(
-                    "Successfully removed songs from position %(from)s in queue to position %(to)s!",
+                    "Successfully removed songs %(from)s through %(to)s!",
                     ssd_,
                 )
                 % {"from": indexes[0] + 1, "to": indexes[1] + 1},
@@ -5403,13 +5413,14 @@ class MusicBot(discord.Client):
 
             if not position:
                 idx = len(player.playlist.entries)
+            else:
+                try:
+                    idx = int(position)
+                except (TypeError, ValueError) as e:
+                    raise exceptions.CommandError(
+                        "Invalid entry number. Use the queue command to find queue positions.",
+                    ) from e
 
-            try:
-                idx = int(position)
-            except (TypeError, ValueError) as e:
-                raise exceptions.CommandError(
-                    "Invalid entry number. Use the queue command to find queue positions.",
-                ) from e
 
             if idx < 1 or idx > len(player.playlist.entries):
                 raise exceptions.CommandError(
