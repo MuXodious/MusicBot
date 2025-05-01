@@ -5297,8 +5297,7 @@ class MusicBot(discord.Client):
             + _Dd("    Remove a song at the end of the queue or at [POSITION].\n"),
             "{cmd} <FROM> <TO>\n"
             + _Dd("    Remove songs from position FROM to position TO.\n"),
-            "{cmd} <@USER>\n"
-            + _Dd("    Remove songs added by the mentioned user.\n"),
+            "{cmd} <@USER>\n" + _Dd("    Remove songs added by the mentioned user.\n"),
         ],
         desc=_Dd(
             "Remove a song from the queue at POSITION specified.\n"
@@ -5420,7 +5419,6 @@ class MusicBot(discord.Client):
                     raise exceptions.CommandError(
                         "Invalid entry number. Use the queue command to find queue positions.",
                     ) from e
-
 
             if idx < 1 or idx > len(player.playlist.entries):
                 raise exceptions.CommandError(
