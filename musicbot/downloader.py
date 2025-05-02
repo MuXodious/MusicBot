@@ -85,6 +85,7 @@ ytdl_format_options_immutable = MappingProxyType(
         "usenetrc": True,
         "no_color": True,
         "retries": 1,
+        "concurrent_fragment_downloads": 16,
     }
 )
 
